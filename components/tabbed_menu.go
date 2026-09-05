@@ -1,6 +1,7 @@
 package components
 
 import (
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"github.com/jorgerojas26/lazysql/app"
@@ -32,19 +33,26 @@ type TabbedPaneState struct {
 
 type TabbedPane struct {
 	*tview.Pages
-	HeaderContainer *tview.Flex
+	HeaderContainer *tview.Grid
 	state           *TabbedPaneState
+	headerWidths    []int
 }
 
 func NewTabbedPane() *TabbedPane {
-	container := tview.NewFlex()
+	container := tview.NewGrid()
 	container.SetBorderPadding(0, 0, 1, 1)
+	container.SetRows(1)
 
 	tabbedPane := &TabbedPane{
 		Pages:           tview.NewPages(),
 		HeaderContainer: container,
 		state:           &TabbedPaneState{},
 	}
+
+	container.SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
+		tabbedPane.alignHeaderToWidth(width - 2)
+		return x + 1, y, width - 2, height
+	})
 
 	return tabbedPane
 }
@@ -74,9 +82,11 @@ func (t *TabbedPane) AppendTab(name string, content TabContent, reference string
 		t.state.CurrentTab = newTab
 	}
 
-	t.HeaderContainer.AddItem(newTab.Header, len(newTab.Name)+2, 0, false)
+	t.headerWidths = append(t.headerWidths, len(newTab.Name)+2)
+	t.rebuildHeaderStrip()
 
 	t.HighlightTabHeader(newTab)
+	t.AlignHeaderToCurrentTab()
 
 	t.AddAndSwitchToPage(reference, content.GetPrimitive(), true)
 }
@@ -85,6 +95,14 @@ func (t *TabbedPane) RemoveCurrentTab() *Tab {
 	currentTab := t.state.CurrentTab
 
 	if currentTab != nil {
+		index := 0
+		for tab := t.state.FirstTab; tab != nil; tab = tab.NextTab {
+			if tab == currentTab {
+				break
+			}
+			index++
+		}
+
 		t.HeaderContainer.RemoveItem(currentTab.Header)
 		t.RemovePage(currentTab.Reference)
 
@@ -94,6 +112,10 @@ func (t *TabbedPane) RemoveCurrentTab() *Tab {
 			t.state.FirstTab = nil
 			t.state.LastTab = nil
 			t.state.CurrentTab = nil
+
+			t.headerWidths = nil
+			t.rebuildHeaderStrip()
+
 			return nil
 		}
 
@@ -112,6 +134,11 @@ func (t *TabbedPane) RemoveCurrentTab() *Tab {
 			currentTab.NextTab.PreviousTab = currentTab.PreviousTab
 		}
 
+		if index < len(t.headerWidths) {
+			t.headerWidths = append(t.headerWidths[:index], t.headerWidths[index+1:]...)
+		}
+		t.rebuildHeaderStrip()
+
 		if currentTab.PreviousTab != nil {
 			t.SetCurrentTab(currentTab.PreviousTab)
 			return currentTab.PreviousTab
@@ -129,9 +156,66 @@ func (t *TabbedPane) SetCurrentTab(tab *Tab) *Tab {
 
 	t.SwitchToPage(tab.Reference)
 
+	t.AlignHeaderToCurrentTab()
+
 	app.App.SetFocus(tab.Content.GetPrimitive())
 
 	return tab
+}
+
+func (t *TabbedPane) rebuildHeaderStrip() {
+	t.HeaderContainer.Clear()
+
+	if len(t.headerWidths) == 0 {
+		t.HeaderContainer.SetColumns()
+		return
+	}
+
+	t.HeaderContainer.SetColumns(t.headerWidths...)
+
+	tab := t.state.FirstTab
+	for i := 0; tab != nil && i < len(t.headerWidths); i++ {
+		t.HeaderContainer.AddItem(tab.Header, 0, i, 1, 1, 1, t.headerWidths[i], false)
+		tab = tab.NextTab
+	}
+}
+
+func (t *TabbedPane) AlignHeaderToCurrentTab() {
+	if t.state.CurrentTab == nil || len(t.headerWidths) == 0 {
+		return
+	}
+	_, _, width, _ := t.HeaderContainer.GetInnerRect()
+	t.alignHeaderToWidth(width)
+}
+
+func (t *TabbedPane) alignHeaderToWidth(width int) {
+	if width <= 0 {
+		t.HeaderContainer.SetOffset(0, 0)
+		return
+	}
+
+	index := 0
+	for tab := t.state.FirstTab; tab != nil; tab = tab.NextTab {
+		if tab == t.state.CurrentTab {
+			break
+		}
+		index++
+	}
+	if index >= len(t.headerWidths) {
+		return
+	}
+
+	used := t.headerWidths[index]
+	target := index
+	for i := index - 1; i >= 0; i-- {
+		if used+t.headerWidths[i] > width {
+			break
+		}
+		used += t.headerWidths[i]
+		target = i
+	}
+
+	t.HeaderContainer.SetOffset(0, target)
 }
 
 func (t *TabbedPane) GetCurrentTab() *Tab {
