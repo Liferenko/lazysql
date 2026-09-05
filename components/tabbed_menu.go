@@ -31,11 +31,15 @@ type TabbedPaneState struct {
 	Length     int
 }
 
+const headerArrowMaxWidth = 3
+
 type TabbedPane struct {
 	*tview.Pages
-	HeaderContainer *tview.Grid
-	state           *TabbedPaneState
-	headerWidths    []int
+	HeaderContainer      *tview.Grid
+	state                *TabbedPaneState
+	headerWidths         []int
+	headerHasHiddenLeft  bool
+	headerHasHiddenRight bool
 }
 
 func NewTabbedPane() *TabbedPane {
@@ -50,8 +54,34 @@ func NewTabbedPane() *TabbedPane {
 	}
 
 	container.SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
-		tabbedPane.alignHeaderToWidth(width - 2)
-		return x + 1, y, width - 2, height
+		innerWidth := width - 2
+
+		leftReserve, rightReserve := 0, 0
+		for {
+			tabbedPane.alignHeaderToWidth(innerWidth - leftReserve - rightReserve)
+
+			newLeft, newRight := 0, 0
+			if tabbedPane.headerHasHiddenLeft {
+				newLeft = headerArrowMaxWidth
+			}
+			if tabbedPane.headerHasHiddenRight {
+				newRight = headerArrowMaxWidth
+			}
+
+			if newLeft == leftReserve && newRight == rightReserve {
+				break
+			}
+			leftReserve, rightReserve = newLeft, newRight
+		}
+
+		if tabbedPane.headerHasHiddenLeft {
+			tview.Print(screen, "<< ", x+1, y, leftReserve, tview.AlignLeft, app.Styles.TertiaryTextColor)
+		}
+		if tabbedPane.headerHasHiddenRight {
+			tview.Print(screen, " >>", x+1+innerWidth-rightReserve, y, rightReserve, tview.AlignRight, app.Styles.TertiaryTextColor)
+		}
+
+		return x + 1 + leftReserve, y, innerWidth - leftReserve - rightReserve, height
 	})
 
 	return tabbedPane
@@ -189,6 +219,9 @@ func (t *TabbedPane) AlignHeaderToCurrentTab() {
 }
 
 func (t *TabbedPane) alignHeaderToWidth(width int) {
+	t.headerHasHiddenLeft = false
+	t.headerHasHiddenRight = false
+
 	if width <= 0 {
 		t.HeaderContainer.SetOffset(0, 0)
 		return
@@ -214,6 +247,19 @@ func (t *TabbedPane) alignHeaderToWidth(width int) {
 		used += t.headerWidths[i]
 		target = i
 	}
+
+	visibleColumns := 0
+	used = 0
+	for i := target; i < len(t.headerWidths); i++ {
+		if used+t.headerWidths[i] > width {
+			break
+		}
+		used += t.headerWidths[i]
+		visibleColumns++
+	}
+
+	t.headerHasHiddenLeft = target > 0
+	t.headerHasHiddenRight = visibleColumns < len(t.headerWidths)-target
 
 	t.HeaderContainer.SetOffset(0, target)
 }
